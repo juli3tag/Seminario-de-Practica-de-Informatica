@@ -1,1 +1,157 @@
+-- Archivo: mantis_pm_esquema_y_seed.sql
+-- Creación de esquema y tablas para MANTIS-PM (nombres en español)
+
+CREATE DATABASE IF NOT EXISTS mantis_pm;
+USE mantis_pm;
+
+-- Tabla de empresas
+CREATE TABLE empresas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(150) NOT NULL,
+  cuit VARCHAR(30),
+  creado_en DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Tabla de plantas
+CREATE TABLE plantas (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  nombre VARCHAR(150) NOT NULL,
+  ubicacion VARCHAR(255),
+  creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
+);
+
+-- Tabla de equipos
+CREATE TABLE equipos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  planta_id INT NOT NULL,
+  tag VARCHAR(100) NOT NULL,
+  modelo VARCHAR(100),
+  tipo VARCHAR(100),
+  ubicacion VARCHAR(100),
+  estado ENUM('offline','idle','running','mantenimiento') DEFAULT 'idle',
+  creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (planta_id) REFERENCES plantas(id) ON DELETE CASCADE
+);
+
+-- Tabla de sensores
+CREATE TABLE sensores (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  equipo_id INT NOT NULL,
+  uid_sensor VARCHAR(100) UNIQUE NOT NULL,
+  tipo_sensor ENUM('vibracion','temperatura','corriente','horas') NOT NULL,
+  modelo VARCHAR(100),
+  instalado_en DATETIME,
+  activo BOOLEAN DEFAULT TRUE,
+  creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (equipo_id) REFERENCES equipos(id) ON DELETE CASCADE
+);
+
+-- Tabla de lecturas de sensores (series temporales)
+CREATE TABLE lecturas_sensor (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  sensor_id INT NOT NULL,
+  valor DOUBLE NOT NULL,
+  unidad VARCHAR(30),
+  registrado_en DATETIME NOT NULL,
+  ingestion_ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+  payload_raw JSON NULL,
+  INDEX idx_sensor_tiempo (sensor_id, registrado_en),
+  FOREIGN KEY (sensor_id) REFERENCES sensores(id) ON DELETE CASCADE
+);
+
+-- Tabla de configuración de alertas
+CREATE TABLE config_alerta (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  equipo_id INT NULL,
+  tipo_sensor ENUM('vibracion','temperatura','corriente','horas') NOT NULL,
+  umbral_alto DOUBLE NULL,
+  umbral_bajo DOUBLE NULL,
+  ventana_segundos INT DEFAULT 0,
+  auto_crear_ot BOOLEAN DEFAULT FALSE,
+  descripcion VARCHAR(255),
+  activo BOOLEAN DEFAULT TRUE,
+  FOREIGN KEY (equipo_id) REFERENCES equipos(id) ON DELETE SET NULL
+);
+
+-- Tabla de alertas generadas
+CREATE TABLE alertas (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  lectura_id BIGINT NULL,
+  sensor_id INT NULL,
+  equipo_id INT NULL,
+  tipo_alerta VARCHAR(100),
+  severidad ENUM('info','advertencia','critica') DEFAULT 'advertencia',
+  mensaje VARCHAR(500),
+  generado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
+  reconocido BOOLEAN DEFAULT FALSE,
+  reconocido_por INT NULL,
+  reconocido_en DATETIME NULL,
+  FOREIGN KEY (lectura_id) REFERENCES lecturas_sensor(id) ON DELETE SET NULL,
+  FOREIGN KEY (sensor_id) REFERENCES sensores(id) ON DELETE SET NULL,
+  FOREIGN KEY (equipo_id) REFERENCES equipos(id) ON DELETE SET NULL
+);
+
+-- Tabla de órdenes de trabajo
+CREATE TABLE orden_trabajo (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  equipo_id INT NOT NULL,
+  creado_por INT NOT NULL,
+  asignado_a INT NULL,
+  alerta_id BIGINT NULL,
+  prioridad ENUM('baja','media','alta','urgente') DEFAULT 'media',
+  estado ENUM('abierta','en_progreso','cerrada','cancelada') DEFAULT 'abierta',
+  descripcion TEXT,
+  creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
+  planificado_en DATETIME NULL,
+  cerrado_en DATETIME NULL,
+  FOREIGN KEY (equipo_id) REFERENCES equipos(id) ON DELETE CASCADE,
+  FOREIGN KEY (alerta_id) REFERENCES alertas(id) ON DELETE SET NULL
+);
+
+-- Tabla de registro de mantenimiento (detalles de ejecución)
+CREATE TABLE registro_mantenimiento (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  orden_trabajo_id BIGINT NOT NULL,
+  realizado_por INT NOT NULL,
+  realizado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
+  notas TEXT,
+  costo DECIMAL(10,2) DEFAULT 0.00,
+  FOREIGN KEY (orden_trabajo_id) REFERENCES orden_trabajo(id) ON DELETE CASCADE
+);
+
+-- Tablas de usuarios y roles
+CREATE TABLE roles (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  nombre VARCHAR(50) UNIQUE NOT NULL,
+  descripcion VARCHAR(255)
+);
+
+CREATE TABLE usuarios (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  usuario VARCHAR(80) UNIQUE NOT NULL,
+  clave_hash VARCHAR(255) NOT NULL,
+  nombre_completo VARCHAR(150),
+  email VARCHAR(150),
+  rol_id INT NOT NULL,
+  activo BOOLEAN DEFAULT TRUE,
+  creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (rol_id) REFERENCES roles(id)
+);
+
+-- Índices adicionales
+CREATE INDEX idx_equipo_planta ON equipos(planta_id);
+CREATE INDEX idx_lecturas_tiempo ON lecturas_sensor(registrado_en);
+
+-- Seed de ejemplo (datos mínimos para pruebas)
+INSERT INTO empresas (nombre, cuit) VALUES ('Industrias Alfa S.A.', '30-12345678-9');
+INSERT INTO plantas (empresa_id, nombre, ubicacion) VALUES (1, 'Planta Neuquén', 'Cutral Có, Neuquén');
+INSERT INTO equipos (planta_id, tag, modelo, tipo, ubicacion) VALUES (1, 'EQ-100', 'Model-X', 'Centrífuga', 'Línea 1');
+INSERT INTO sensores (equipo_id, uid_sensor, tipo_sensor, modelo, instalado_en) VALUES (1, 'S-100-VIB', 'vibracion', 'VibX', NOW()), (1, 'S-100-TEMP', 'temperatura', 'TempX', NOW());
+INSERT INTO config_alerta (equipo_id, tipo_sensor, umbral_alto, descripcion, auto_crear_ot, activo) VALUES (1, 'vibracion', 10.0, 'Umbral vibración EQ-100', TRUE, TRUE), (NULL, 'temperatura', 80.0, 'Umbral global temperatura', FALSE, TRUE);
+INSERT INTO roles (nombre, descripcion) VALUES ('admin', 'Administrador del sistema'), ('tecnico', 'Técnico de mantenimiento');
+-- Nota: reemplazar 'HASHED_PASS' por hash BCyrpt real antes de producción
+INSERT INTO usuarios (usuario, clave_hash, nombre_completo, email, rol_id) VALUES ('admin', 'HASHED_PASS', 'Administrador General', 'admin@ejemplo.com', 1);
+INSERT INTO lecturas_sensor (sensor_id, valor, unidad, registrado_en, payload_raw) VALUES (1, 12.5, 'mm/s', NOW(), JSON_OBJECT('origen','gateway-1','seq',1));
 
